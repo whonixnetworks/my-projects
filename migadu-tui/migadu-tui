@@ -1,0 +1,735 @@
+#!/usr/bin/env python3
+# migadu-tui — Migadu CLI TUI Manager
+# author: greedy
+# version: 1.1.0
+
+import sys
+import configparser
+from pathlib import Path
+import requests
+from typing import Dict, List, Tuple, Any
+import curses
+from curses import wrapper
+
+# CONFIGURATION variables
+CONFIG_DIR = Path.home() / ".config" / "migaducli"  # Directory for configuration files
+CONFIG_FILE = CONFIG_DIR / "migadu.conf"  # Main configuration file path
+API_BASE_URL = "https://api.migadu.com/v1/"  # Migadu API endpoint
+API_TIMEOUT = 30  # Request timeout in seconds
+
+# Color/style definitions for terminal output
+class Colors:
+    RED = '\033[0;31m'
+    GREEN = '\033[0;32m'
+    YELLOW = '\033[1;33m'
+    BLUE = '\033[0;34m'
+    CYAN = '\033[0;36m'
+    MAGENTA = '\033[0;35m'
+    WHITE = '\033[1;37m'
+    GRAY = '\033[0;90m'
+    BOLD = '\033[1m'
+    DIM = '\033[2m'
+    NC = '\033[0m'
+
+# Standard log functions
+def log_info(msg: str) -> None:
+    print(f"{Colors.BLUE}[INFO]{Colors.NC} {msg}")
+
+def log_success(msg: str) -> None:
+    print(f"{Colors.GREEN}✓{Colors.NC} {msg}")
+
+def log_warning(msg: str) -> None:
+    print(f"{Colors.YELLOW}[WARNING]{Colors.NC} {msg}")
+
+def log_error(msg: str) -> None:
+    print(f"{Colors.RED}[ERROR]{Colors.NC} {msg}")
+
+def die(msg: str) -> None:
+    log_error(f"FATAL: {msg}")
+    sys.exit(1)
+
+# Helper functions
+def show_header(title: str) -> None:
+    print(f"{Colors.BLUE}========================================{Colors.NC}")
+    print(f"{Colors.BLUE}   {title}{Colors.NC}")
+    print(f"{Colors.BLUE}========================================{Colors.NC}")
+    print()
+
+def show_section(title: str) -> None:
+    print(f"{Colors.MAGENTA}=== {title} ==={Colors.NC}")
+
+def ensure_config_dir() -> None:
+    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+
+def load_config() -> configparser.ConfigParser:
+    config = configparser.ConfigParser()
+    if CONFIG_FILE.exists():
+        config.read(CONFIG_FILE)
+    return config
+
+def save_config(config: configparser.ConfigParser) -> None:
+    ensure_config_dir()
+    with open(CONFIG_FILE, 'w') as f:
+        config.write(f)
+
+def get_api_credentials() -> Tuple[str, str]:
+    config = load_config()
+    if not config.has_section('credentials'):
+        die("No credentials found. Please run 'migadu-tui --setup' first.")
+    
+    email = config.get('credentials', 'email', fallback='')
+    api_key = config.get('credentials', 'api_key', fallback='')
+    
+    if not email or not api_key:
+        die("Invalid credentials. Please run 'migadu-tui --setup' first.")
+    
+    return email, api_key
+
+# Core logic functions
+class MigaduAPI:
+    def __init__(self, email: str, api_key: str):
+        self.email = email
+        self.api_key = api_key
+        self.session = requests.Session()
+        self.session.auth = (email, api_key)
+        self.session.headers.update({
+            'Content-Type': 'application/json',
+            'Accept': 'application/json'
+        })
+    
+    def _make_request(self, method: str, endpoint: str, **kwargs) -> Dict[str, Any]:
+        url = f"{API_BASE_URL}{endpoint}"
+        try:
+            response = self.session.request(method, url, timeout=API_TIMEOUT, **kwargs)
+            response.raise_for_status()
+            
+            # Handle empty responses
+            if not response.content:
+                return {}
+            
+            # Try to parse JSON
+            try:
+                return response.json()
+            except ValueError as e:
+                log_error(f"Failed to parse JSON response: {e}")
+                log_error(f"Response content: {response.text[:200]}")
+                return {}
+                
+        except requests.exceptions.RequestException as e:
+            log_error(f"API request failed: {e}")
+            if e.response is not None:
+                log_error(f"Response: {e.response.text[:200]}")
+            raise
+    
+    def get_domains(self) -> List[Dict[str, Any]]:
+        result = self._make_request('GET', 'domains')
+        # Handle case where API returns list directly
+        if isinstance(result, list):
+            return result
+        # Handle case where API returns dict with 'domains' key
+        elif isinstance(result, dict) and 'domains' in result:
+            return result['domains']
+        # Return empty list for unexpected format
+        log_warning(f"Unexpected domains response format: {type(result)}")
+        return []
+    
+    def get_domain(self, domain_name: str) -> Dict[str, Any]:
+        result = self._make_request('GET', f'domains/{domain_name}')
+        # Handle case where API returns dict with 'domain' key
+        if isinstance(result, dict) and 'domain' in result:
+            return result['domain']
+        # Return result directly if it's already a dict
+        elif isinstance(result, dict):
+            return result
+        # Return empty dict for unexpected format
+        log_warning(f"Unexpected domain response format: {type(result)}")
+        return {}
+    
+    def get_mailboxes(self, domain_name: str) -> List[Dict[str, Any]]:
+        result = self._make_request('GET', f'domains/{domain_name}/mailboxes')
+        # Handle case where API returns list directly
+        if isinstance(result, list):
+            return result
+        # Handle case where API returns dict with 'mailboxes' key
+        elif isinstance(result, dict) and 'mailboxes' in result:
+            return result['mailboxes']
+        # Return empty list for unexpected format
+        log_warning(f"Unexpected mailboxes response format: {type(result)}")
+        return []
+    
+    def get_mailbox(self, domain_name: str, local_part: str) -> Dict[str, Any]:
+        return self._make_request('GET', f'domains/{domain_name}/mailboxes/{local_part}')
+    
+    def create_mailbox(self, domain_name: str, data: Dict[str, Any]) -> Dict[str, Any]:
+        return self._make_request('POST', f'domains/{domain_name}/mailboxes', json=data)
+    
+    def update_mailbox(self, domain_name: str, local_part: str, data: Dict[str, Any]) -> Dict[str, Any]:
+        return self._make_request('PUT', f'domains/{domain_name}/mailboxes/{local_part}', json=data)
+    
+    def delete_mailbox(self, domain_name: str, local_part: str) -> None:
+        self._make_request('DELETE', f'domains/{domain_name}/mailboxes/{local_part}')
+
+# TUI Interface
+class MigaduTUI:
+    def __init__(self, stdscr):
+        self.stdscr = stdscr
+        self.current_screen = 'domains'
+        self.selected_domain = None
+        self.domains = []
+        self.mailboxes = []
+        
+        curses.curs_set(0)
+        self.stdscr.keypad(True)
+        self.init_colors()
+    
+    def init_colors(self):
+        curses.start_color()
+        curses.use_default_colors()
+        curses.init_pair(1, curses.COLOR_CYAN, -1)
+        curses.init_pair(2, curses.COLOR_GREEN, -1)
+        curses.init_pair(3, curses.COLOR_YELLOW, -1)
+        curses.init_pair(4, curses.COLOR_RED, -1)
+        curses.init_pair(5, curses.COLOR_BLUE, -1)
+        curses.init_pair(6, curses.COLOR_MAGENTA, -1)
+    
+    def safe_addstr(self, y: int, x: int, text: str, attr=None):
+        height, width = self.stdscr.getmaxyx()
+        if y < 0 or y >= height or x < 0 or x >= width:
+            return False
+        
+        # Truncate text if it would exceed terminal width
+        max_len = width - x
+        if max_len > 0:
+            text = text[:max_len]
+        else:
+            return False
+        
+        try:
+            if attr:
+                return self.stdscr.addstr(y, x, text, attr)
+            else:
+                return self.stdscr.addstr(y, x, text)
+        except curses.error:
+            return False
+    
+    def draw_header(self, title: str):
+        height, width = self.stdscr.getmaxyx()
+        if height < 5 or width < 20:
+            return
+        header = f" Migadu CLI TUI - {title} "
+        self.stdscr.attron(curses.color_pair(5))
+        self.safe_addstr(0, 0, "=" * width)
+        self.safe_addstr(1, (width - len(header)) // 2, header)
+        self.safe_addstr(2, 0, "=" * width)
+        self.stdscr.attroff(curses.color_pair(5))
+    
+    def draw_footer(self, message: str = ""):
+        height, width = self.stdscr.getmaxyx()
+        if height < 5:
+            return
+        footer = " [Q]uit  [↑↓]Navigate  [Enter]Select  [R]efresh "
+        self.stdscr.attron(curses.color_pair(3))
+        self.safe_addstr(height - 2, 0, "=" * width)
+        self.safe_addstr(height - 1, 0, footer)
+        if message:
+            self.safe_addstr(height - 1, len(footer) + 2, message)
+        self.stdscr.attroff(curses.color_pair(3))
+    
+    def show_domains_screen(self, api: MigaduAPI):
+        self.current_screen = 'domains'
+        self.selected_domain = None
+        
+        try:
+            self.domains = api.get_domains()
+            if not self.domains:
+                self.domains = []
+        except Exception as e:
+            try:
+                self.show_error(f"Failed to fetch domains: {e}")
+            except curses.error:
+                # Fallback if curses fails too
+                pass
+            return
+        
+        selected_idx = 0
+        while True:
+            self.stdscr.clear()
+            self.draw_header("Domains")
+            
+            height, width = self.stdscr.getmaxyx()
+            
+            # Draw domain list
+            for idx, domain in enumerate(self.domains):
+                y = 4 + idx
+                if y >= height - 3:
+                    break
+                
+                # Handle case where domain might not be a dict
+                if isinstance(domain, dict):
+                    name = domain.get('name', 'Unknown')
+                    state = domain.get('state', 'unknown')
+                else:
+                    # If domain is a string or other type, use it as name
+                    name = str(domain)
+                    state = 'unknown'
+                
+                status_color = curses.color_pair(2) if state == 'active' else curses.color_pair(3)
+                
+                if idx == selected_idx:
+                    self.stdscr.attron(curses.A_REVERSE)
+                
+                self.safe_addstr(y, 2, f"* " if idx == selected_idx else "o ")
+                self.stdscr.attron(status_color)
+                self.safe_addstr(y, 4, f"{name:30}")
+                self.stdscr.attroff(status_color)
+                self.safe_addstr(y, 34, f" | State: {state:10}")
+                
+                if idx == selected_idx:
+                    self.stdscr.attroff(curses.A_REVERSE)
+            
+            if self.domains:
+                domain = self.domains[selected_idx]
+                if isinstance(domain, dict):
+                    domain_name = domain.get('name', 'Unknown')
+                else:
+                    domain_name = str(domain)
+                self.draw_footer(f"Selected: {domain_name}")
+            else:
+                self.draw_footer("Selected: None")
+            
+            try:
+                key = self.stdscr.getch()
+            except curses.error:
+                continue
+                
+            if key == ord('q') or key == ord('Q'):
+                break
+            elif key == curses.KEY_UP and selected_idx > 0:
+                selected_idx -= 1
+            elif key == curses.KEY_DOWN and selected_idx < len(self.domains) - 1:
+                selected_idx += 1
+            elif key == ord('\n') or key == ord('\r'):
+                if self.domains:
+                    domain = self.domains[selected_idx]
+                    # Ensure selected_domain is a dict with at least a name
+                    if isinstance(domain, dict):
+                        self.selected_domain = domain
+                    else:
+                        self.selected_domain = {'name': str(domain)}
+                    self.show_domain_details(api)
+            elif key == ord('r') or key == ord('R'):
+                try:
+                    self.domains = api.get_domains()
+                    if selected_idx >= len(self.domains):
+                        selected_idx = max(0, len(self.domains) - 1)
+                except Exception as e:
+                    try:
+                        self.show_error(f"Refresh failed: {e}")
+                    except curses.error:
+                        pass
+    
+    def show_domain_details(self, api: MigaduAPI):
+        if not self.selected_domain:
+            return
+        
+        domain_name = self.selected_domain['name']
+        
+        try:
+            domain_details = api.get_domain(domain_name)
+            mailboxes = api.get_mailboxes(domain_name)
+        except Exception as e:
+            self.show_error(f"Failed to fetch domain details: {e}")
+            return
+        
+        selected_idx = 0
+        while True:
+            self.stdscr.clear()
+            self.draw_header(f"Domain: {domain_name}")
+            
+            height, width = self.stdscr.getmaxyx()
+            
+            # Domain info
+            y = 4
+            self.safe_addstr(y, 2, f"Name: {domain_details.get('name', 'N/A')}")
+            y += 1
+            self.safe_addstr(y, 2, f"State: {domain_details.get('state', 'N/A')}")
+            y += 1
+            self.safe_addstr(y, 2, f"Activated: {domain_details.get('activated_at', 'N/A')}")
+            y += 1
+            self.safe_addstr(y, 2, f"Can Send: {'[Y]' if domain_details.get('can_send') else '[N]'}")
+            y += 1
+            self.safe_addstr(y, 2, f"Can Receive: {'[Y]' if domain_details.get('can_receive') else '[N]'}")
+            y += 2
+            
+            # Mailboxes section
+            self.stdscr.attron(curses.color_pair(6))
+            self.safe_addstr(y, 2, "Mailboxes:")
+            self.stdscr.attroff(curses.color_pair(6))
+            y += 1
+            
+            for idx, mailbox in enumerate(mailboxes):
+                line_y = y + idx
+                if line_y >= height - 3:
+                    break
+                
+                address = mailbox.get('address', 'Unknown')
+                name = mailbox.get('name', 'No name')
+                
+                if idx == selected_idx:
+                    self.stdscr.attron(curses.A_REVERSE)
+                
+                self.safe_addstr(line_y, 4, f"* " if idx == selected_idx else "o ")
+                self.safe_addstr(line_y, 6, f"{address:30} | {name}")
+                
+                if idx == selected_idx:
+                    self.stdscr.attroff(curses.A_REVERSE)
+            
+            self.draw_footer("[B]ack  [C]reate  [E]dit  [D]elete  [P]assword")
+            
+            key = self.stdscr.getch()
+            
+            if key == ord('b') or key == ord('B'):
+                break
+            elif key == ord('q') or key == ord('Q'):
+                sys.exit(0)
+            elif key == curses.KEY_UP and selected_idx > 0:
+                selected_idx -= 1
+            elif key == curses.KEY_DOWN and selected_idx < len(mailboxes) - 1:
+                selected_idx += 1
+            elif key == ord('c') or key == ord('C'):
+                self.create_mailbox(api, domain_name)
+                mailboxes = api.get_mailboxes(domain_name)
+                if selected_idx >= len(mailboxes):
+                    selected_idx = max(0, len(mailboxes) - 1)
+            elif mailboxes and key in (ord('e'), ord('E')):
+                self.edit_mailbox(api, domain_name, mailboxes[selected_idx])
+                mailboxes = api.get_mailboxes(domain_name)
+                if selected_idx >= len(mailboxes):
+                    selected_idx = max(0, len(mailboxes) - 1)
+            elif mailboxes and key in (ord('d'), ord('D')):
+                self.delete_mailbox(api, domain_name, mailboxes[selected_idx])
+                mailboxes = api.get_mailboxes(domain_name)
+                if selected_idx >= len(mailboxes):
+                    selected_idx = max(0, len(mailboxes) - 1)
+            elif mailboxes and key in (ord('p'), ord('P')):
+                self.reset_password(api, domain_name, mailboxes[selected_idx])
+    
+    def create_mailbox(self, api: MigaduAPI, domain_name: str):
+        height, width = self.stdscr.getmaxyx()
+        
+        # Create input dialog
+        dialog_height = 10
+        dialog_width = 60
+        start_y = (height - dialog_height) // 2
+        start_x = (width - dialog_width) // 2
+        
+        # Draw dialog box
+        self.stdscr.attron(curses.color_pair(1))
+        for y in range(start_y, start_y + dialog_height):
+            self.safe_addstr(y, start_x, " " * dialog_width)
+        
+        self.safe_addstr(start_y, start_x, "+" + "-" * (dialog_width - 2) + "+")
+        self.safe_addstr(start_y + dialog_height - 1, start_x, "+" + "-" * (dialog_width - 2) + "+")
+        for y in range(start_y + 1, start_y + dialog_height - 1):
+            self.safe_addstr(y, start_x, "|")
+            self.safe_addstr(y, start_x + dialog_width - 1, "|")
+        
+        self.safe_addstr(start_y + 1, start_x + 2, "Create New Mailbox")
+        self.safe_addstr(start_y + 3, start_x + 4, "Local part (before @): ")
+        self.safe_addstr(start_y + 4, start_x + 4, "Display name: ")
+        self.safe_addstr(start_y + 5, start_x + 4, "Password: ")
+        self.safe_addstr(start_y + 7, start_x + 4, "[Enter]Create  [Esc]Cancel")
+        self.stdscr.attroff(curses.color_pair(1))
+        
+        # Get input
+        curses.echo()
+        self.stdscr.move(start_y + 3, start_x + 26)
+        local_part = self.stdscr.getstr().decode('utf-8').strip()
+        
+        self.stdscr.move(start_y + 4, start_x + 19)
+        name = self.stdscr.getstr().decode('utf-8').strip()
+        curses.noecho()
+        
+        self.stdscr.move(start_y + 5, start_x + 15)
+        password = self.stdscr.getstr().decode('utf-8').strip()
+        
+        if not local_part:
+            return
+
+        if not password:
+            self.show_message("Password is required")
+            return
+        
+        # Create mailbox
+        try:
+            data = {
+                "local_part": local_part,
+                "name": name,
+                "password": password
+            }
+            api.create_mailbox(domain_name, data)
+            self.show_message(f"Mailbox {local_part}@{domain_name} created successfully!")
+        except Exception as e:
+            self.show_error(f"Failed to create mailbox: {e}")
+    
+    def edit_mailbox(self, api: MigaduAPI, domain_name: str, mailbox: Dict[str, Any]):
+        local_part = mailbox.get('local_part', '')
+        if not local_part:
+            self.show_error("Invalid mailbox")
+            return
+        
+        height, width = self.stdscr.getmaxyx()
+        
+        # Create edit dialog
+        dialog_height = 12
+        dialog_width = 70
+        start_y = (height - dialog_height) // 2
+        start_x = (width - dialog_width) // 2
+        
+        # Draw dialog box
+        self.stdscr.attron(curses.color_pair(1))
+        for y in range(start_y, start_y + dialog_height):
+            self.safe_addstr(y, start_x, " " * dialog_width)
+        
+        self.safe_addstr(start_y, start_x, "+" + "-" * (dialog_width - 2) + "+")
+        self.safe_addstr(start_y + dialog_height - 1, start_x, "+" + "-" * (dialog_width - 2) + "+")
+        for y in range(start_y + 1, start_y + dialog_height - 1):
+            self.safe_addstr(y, start_x, "|")
+            self.safe_addstr(y, start_x + dialog_width - 1, "|")
+        
+        self.safe_addstr(start_y + 1, start_x + 2, f"Edit Mailbox: {mailbox.get('address', '')}")
+        self.safe_addstr(start_y + 3, start_x + 4, f"Current name: {mailbox.get('name', '')}")
+        self.safe_addstr(start_y + 4, start_x + 4, "New name: ")
+        self.safe_addstr(start_y + 6, start_x + 4, "New password (leave empty to keep current): ")
+        self.safe_addstr(start_y + 8, start_x + 4, "[Enter]Update  [Esc]Cancel")
+        self.stdscr.attroff(curses.color_pair(1))
+        
+        # Get input
+        curses.echo()
+        self.stdscr.move(start_y + 4, start_x + 15)
+        new_name = self.stdscr.getstr().decode('utf-8').strip()
+        curses.noecho()
+        
+        self.stdscr.move(start_y + 6, start_x + 48)
+        new_password = self.stdscr.getstr().decode('utf-8').strip()
+        
+        # Update mailbox
+        try:
+            data = {}
+            if new_name:
+                data["name"] = new_name
+            if new_password:
+                data["password"] = new_password
+            
+            if data:
+                api.update_mailbox(domain_name, local_part, data)
+                self.show_message(f"Mailbox {local_part}@{domain_name} updated successfully!")
+            else:
+                self.show_message("No changes made")
+        except Exception as e:
+            self.show_error(f"Failed to update mailbox: {e}")
+    
+    def delete_mailbox(self, api: MigaduAPI, domain_name: str, mailbox: Dict[str, Any]):
+        local_part = mailbox.get('local_part', '')
+        address = mailbox.get('address', '')
+        
+        if not local_part:
+            self.show_error("Invalid mailbox")
+            return
+        
+        # Confirm deletion
+        self.show_message(f"Delete mailbox {address}?\n\n[Y]es  [N]o")
+        
+        key = self.stdscr.getch()
+        if key == ord('y') or key == ord('Y'):
+            try:
+                api.delete_mailbox(domain_name, local_part)
+                self.show_message(f"Mailbox {address} deleted successfully!")
+            except Exception as e:
+                self.show_error(f"Failed to delete mailbox: {e}")
+    
+    def reset_password(self, api: MigaduAPI, domain_name: str, mailbox: Dict[str, Any]):
+        local_part = mailbox.get('local_part', '')
+        address = mailbox.get('address', '')
+        
+        if not local_part:
+            self.show_error("Invalid mailbox")
+            return
+        
+        height, width = self.stdscr.getmaxyx()
+        
+        # Create password reset dialog
+        dialog_height = 8
+        dialog_width = 60
+        start_y = (height - dialog_height) // 2
+        start_x = (width - dialog_width) // 2
+        
+        # Draw dialog box
+        self.stdscr.attron(curses.color_pair(1))
+        for y in range(start_y, start_y + dialog_height):
+            self.safe_addstr(y, start_x, " " * dialog_width)
+        
+        self.safe_addstr(start_y, start_x, "+" + "-" * (dialog_width - 2) + "+")
+        self.safe_addstr(start_y + dialog_height - 1, start_x, "+" + "-" * (dialog_width - 2) + "+")
+        for y in range(start_y + 1, start_y + dialog_height - 1):
+            self.safe_addstr(y, start_x, "|")
+            self.safe_addstr(y, start_x + dialog_width - 1, "|")
+        
+        self.safe_addstr(start_y + 1, start_x + 2, f"Reset Password: {address}")
+        self.safe_addstr(start_y + 3, start_x + 4, "New password: ")
+        self.safe_addstr(start_y + 5, start_x + 4, "[Enter]Reset  [Esc]Cancel")
+        self.stdscr.attroff(curses.color_pair(1))
+        
+        # Get input
+        curses.noecho()
+        self.stdscr.move(start_y + 3, start_x + 18)
+        new_password = self.stdscr.getstr().decode('utf-8').strip()
+        
+        if not new_password:
+            self.show_message("Password cannot be empty")
+            return
+        
+        # Reset password
+        try:
+            data = {"password": new_password}
+            api.update_mailbox(domain_name, local_part, data)
+            self.show_message(f"Password for {address} reset successfully!")
+        except Exception as e:
+            self.show_error(f"Failed to reset password: {e}")
+    
+    def show_message(self, message: str):
+        height, width = self.stdscr.getmaxyx()
+        msg_lines = message.split('\n')
+        box_height = len(msg_lines) + 4
+        box_width = max(len(line) for line in msg_lines) + 4
+        
+        start_y = (height - box_height) // 2
+        start_x = (width - box_width) // 2
+        
+        # Draw box
+        self.stdscr.attron(curses.color_pair(1))
+        for y in range(start_y, start_y + box_height):
+            self.safe_addstr(y, start_x, " " * box_width)
+        
+        # Draw border
+        self.safe_addstr(start_y, start_x, "+" + "-" * (box_width - 2) + "+")
+        self.safe_addstr(start_y + box_height - 1, start_x, "+" + "-" * (box_width - 2) + "+")
+        for y in range(start_y + 1, start_y + box_height - 1):
+            self.safe_addstr(y, start_x, "|")
+            self.safe_addstr(y, start_x + box_width - 1, "|")
+        
+        # Draw message
+        for idx, line in enumerate(msg_lines):
+            self.safe_addstr(start_y + 2 + idx, start_x + 2, line)
+        
+        self.stdscr.attroff(curses.color_pair(1))
+        self.stdscr.refresh()
+        self.stdscr.getch()
+    
+    def show_error(self, message: str):
+        self.show_message(f"ERROR: {message}")
+
+# Main execution
+def setup_config():
+    show_header("Migadu CLI TUI Setup")
+    
+    config = configparser.ConfigParser()
+    
+    if CONFIG_FILE.exists():
+        config.read(CONFIG_FILE)
+        if config.has_section('credentials'):
+            print(f"{Colors.YELLOW}⚠ Existing configuration found.{Colors.NC}")
+            print(f"Email: {config.get('credentials', 'email', fallback='Not set')}")
+            response = input(f"\n{Colors.CYAN}Do you want to overwrite? (y/N): {Colors.NC}")
+            if response.lower() != 'y':
+                return
+    
+    print(f"\n{Colors.CYAN}Enter your Migadu credentials:{Colors.NC}")
+    email = input("Email: ").strip()
+    api_key = input("API Key: ").strip()
+    
+    if not email or not api_key:
+        die("Email and API key are required.")
+    
+    if not config.has_section('credentials'):
+        config.add_section('credentials')
+    
+    config.set('credentials', 'email', email)
+    config.set('credentials', 'api_key', api_key)
+    
+    save_config(config)
+    log_success("Configuration saved successfully!")
+
+def show_help():
+    show_header("Migadu CLI TUI Manager v1.1.0")
+    
+    print(f"{Colors.CYAN}Usage:{Colors.NC}")
+    print(f"  {Colors.WHITE}migadu-tui [OPTIONS]{Colors.NC}")
+    print()
+    
+    show_section("Flags")
+    print(f"  {Colors.GREEN}✓{Colors.NC} {Colors.WHITE}--setup{Colors.NC}          Configure API credentials")
+    print(f"  {Colors.BLUE}ℹ{Colors.NC} {Colors.WHITE}--help, -h{Colors.NC}       Show this help")
+    print(f"  {Colors.BLUE}ℹ{Colors.NC} {Colors.WHITE}--version, -v{Colors.NC}    Show version")
+    print()
+    
+    show_section("Examples")
+    print(f"  {Colors.GRAY}migadu-tui --setup{Colors.NC}")
+    print(f"  {Colors.GRAY}migadu-tui{Colors.NC}")
+    print()
+
+def main_tui():
+    try:
+        email, api_key = get_api_credentials()
+        api = MigaduAPI(email, api_key)
+        
+        def run_tui(stdscr):
+            try:
+                # Check for minimum terminal size
+                height, width = stdscr.getmaxyx()
+                if height < 10 or width < 30:
+                    stdscr.clear()
+                    stdscr.addstr(0, 0, "Terminal too small!")
+                    stdscr.addstr(1, 0, "Minimum: 10x30, Current: {}x{}".format(height, width))
+                    stdscr.addstr(2, 0, "Press any key to exit...")
+                    stdscr.refresh()
+                    stdscr.getch()
+                    return
+                
+                tui = MigaduTUI(stdscr)
+                tui.show_domains_screen(api)
+            except curses.error as e:
+                stdscr.clear()
+                stdscr.addstr(0, 0, f"Curses error: {e}")
+                stdscr.addstr(1, 0, "Press any key to exit...")
+                stdscr.refresh()
+                stdscr.getch()
+                raise
+            except Exception as e:
+                raise
+        
+        wrapper(run_tui)
+        
+    except curses.error as e:
+        die(f"TUI curses error: {e}")
+    except Exception as e:
+        die(f"TUI failed: {e}")
+
+def main():
+    if len(sys.argv) > 1:
+        arg = sys.argv[1]
+        if arg in ['--help', '-h']:
+            show_help()
+        elif arg in ['--version', '-v']:
+            print("Migadu CLI TUI Manager v1.1.0")
+        elif arg == '--setup':
+            setup_config()
+        else:
+            log_error(f"Unknown option: {arg}")
+            show_help()
+            sys.exit(1)
+    else:
+        main_tui()
+
+if __name__ == "__main__":
+    main()

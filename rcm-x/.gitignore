@@ -1,0 +1,37 @@
+# OS generated files
+.DS_Store
+Thumbs.db
+desktop.ini
+ehthumbs.db
+
+# Editor / IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Temporary / log files
+*.log
+*.tmp
+tmp/
+temp/
+
+# Pi agent state
+.pi/
+
+# Build artifacts
+*.o
+*.so
+*.a
+__pycache__/
+*.pyc
+
+# Node (if ever used for tooling)
+node_modules/
+package-lock.json
+
+# Secrets — never commit
+.env
+.env.local
+.env.production

@@ -1,0 +1,120 @@
+<p align="center">
+  <img src="rcm-x.png" alt="rcm-x logo" width="200"/>
+</p>
+
+# RCM-X
+
+`rcm-x` ~ A collection of bash scripts aimed to easily mount [rclone](https://rclone.org) remotes to a unix/linux os.
+
+Current version: **v2.3**
+
+---
+
+`rcmx-setup.sh` script provides an interactive setup experience for creating rclone + mergerfs union mounts. Key features include:
+
+- **Interactive Configuration**: Guided setup for instance name, mode selection, directories, remote selection, and performance tuning
+- **Two Modes Available**:
+  - Standard Mode: Choose separate directories for working view, local storage, and remote mount
+  - Merged-only Mode: Specify one working directory with local storage and remote mount hidden in a private subfolder
+- **Automatic Dependency Handling**: Checks and installs required dependencies (mergerfs, rclone, fuse)
+- **Systemd Service Creation**: Generates and enables systemd services for both rclone and mergerfs mounts
+- **Service Management**: Built-in commands for starting, stopping, restarting, checking status, viewing logs, and uninstalling instances
+- **Multi-Instance Support**: Run multiple independent mounts on the same machine (e.g., media, backup, documents)
+
+### Quick Start
+
+```bash
+chmod +x rcmx-setup.sh
+./rcmx-setup.sh
+```
+
+### Usage
+
+Run the script interactively (or use `rcmx` after installation):
+```bash
+./rcmx-setup.sh
+```
+
+Available commands after installation:
+| Command | Description |
+|---------|-------------|
+| `rcmx` | Run interactive setup |
+| `rcmx start` | Start rclone + mergerfs services |
+| `rcmx stop` | Stop mergerfs + rclone services |
+| `rcmx restart` | Restart both services |
+| `rcmx status` | Show all instance status |
+| `rcmx logs` | Show logs for an instance |
+| `rcmx uninstall` | Remove an instance |
+
+### Features
+
+- Automatic UID/GID detection for proper file permissions
+- Mount conflict detection and prevention (including FUSE deadlock prevention)
+- Support for encrypted remotes (GCrypt, crypt)
+- Configurable VFS cache size and parallel transfers
+- Input validation for safe configuration
+- Logging to both systemd journal and dedicated log files
+- Shell alias installation (bash, zsh, fish)
+- Paths with spaces handled correctly in systemd services
+
+### Requirements
+
+- Linux with systemd
+- `mergerfs` — union filesystem
+- `rclone` — cloud storage client
+- `fuse3` or `fuse` — FUSE user-space mount support
+
+### Documentation
+
+For detailed technical documentation including architecture, operating modes, and troubleshooting, see [DOCS.md](DOCS.md).
+
+For a full history of changes, see [CHANGELOG.md](CHANGELOG.md).
+
+----
+
+## rcmv/rcmv
+
+<details>
+<summary>RCMV - Rclone Move Utility (click to expand)</summary>
+
+Extra script for specific use cases: Uses `rclone move` to upload local files to a remote.
+
+- Efficiently moves local files to cloud storage
+- Preserves directory structure during transfer
+- Can be used alongside RCM-X for uploading files from local storage to remote
+- Designed to work with the local storage directory created by RCM-X setup
+
+See [rcmv/README.md](rcmv/README.md) for detailed usage information.
+</details>
+
+----
+
+## rcmnt/rcmnt
+
+<details>
+<summary>RCMNT - Rclone Mount Manager (click to expand)</summary>
+
+Advanced rclone mount management script with health checks, monitoring, and automation.
+
+- **Interactive menu** with color-coded controls
+- **Health checks** and diagnostics for mount stability
+- **Cache management** to optimize storage usage
+- **Log management** with rotation and filtering
+- **Bandwidth control** for transfer speed limits
+- **Systemd integration** for auto-start services
+- **Resource monitoring** of CPU, memory, and processes
+- **Stale mount cleanup** for automatic recovery
+
+See [rcmnt/README.md](rcmnt/README.md) for comprehensive documentation and usage examples.
+</details>
+
+----
+
+## Related Projects
+
+- [rclone](https://rclone.org) - The cloud storage synchronization tool
+- [mergerfs](https://github.com/trapexit/mergerfs) - Feature-rich union filesystem
+
+## License
+
+This project is licensed under the MIT License - see the LICENSE file for details.
