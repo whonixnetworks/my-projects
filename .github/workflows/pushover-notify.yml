@@ -3,7 +3,7 @@ on: [push]
 
 jobs:
   notify:
-    uses: whonixnetworks/autocommit/.github/workflows/pushover-notify.yml@main
+    uses: whonixnetworks/autocommit/.github/workflows/pushover-reusable.yml@main
     with:
       repo: ${{ github.repository }}
       branch: ${{ github.ref_name }}
