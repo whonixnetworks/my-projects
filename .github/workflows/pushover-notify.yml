@@ -1,0 +1,13 @@
+name: Pushover Notification
+on: [push]
+
+jobs:
+  notify:
+    uses: whonixnetworks/autocommit/.github/workflows/pushover-notify.yml@main
+    with:
+      repo: ${{ github.repository }}
+      branch: ${{ github.ref_name }}
+      author: ${{ github.actor }}
+      commit_message: ${{ github.event.head_commit.message }}
+      commit_url: ${{ github.event.head_commit.url }}
+    secrets: inherit
